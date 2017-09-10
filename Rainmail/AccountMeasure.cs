@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 using Rainmeter;
 
@@ -13,6 +14,9 @@ namespace Rainmail
     {
         private static List<AccountMeasure> list = new List<AccountMeasure>();
 
+        private object locker = new object();
+        private bool running = false;
+
         private string host = null;
         private int port = 993;
         private bool useSSL = true;
@@ -22,6 +26,9 @@ namespace Rainmail
         private TemplateOption[] readTemplate = null;
         private TemplateOption[] unreadTemplate = null;
 
+        private int totalMessages = -1;
+        private int totalUnread = -1;
+        private Email[] emails = null;
         private string output = "";
 
         public override void Reload(API api, ref double maxValue)
@@ -57,15 +64,32 @@ namespace Rainmail
                 this.readTemplate = TemplateOption.ParseTemplate(readTemplate);
                 this.unreadTemplate = TemplateOption.ParseTemplate(unreadTemplate);
 
-                Update();
+                DoUpdate();
+            }
+        }
+
+        public void DoUpdate()
+        {
+            UpdateEmails();
+
+            UpdateOutput();
+
+            lock (locker)
+            {
+                running = false;
             }
         }
 
         public override double Update()
         {
-            UpdateEmails();
-
-            UpdateOutput();
+            if (!running)
+            {
+                lock (locker)
+                {
+                    running = true;
+                    Task.Run(() => DoUpdate());
+                }
+            }
 
             return base.Update();
         }
@@ -88,12 +112,12 @@ namespace Rainmail
                     IMailFolder inbox = client.Inbox;
                     inbox.Open(FolderAccess.ReadOnly);
 
-                    TotalMessages = inbox.Count;
-                    TotalUnread = inbox.Unread;
+                    totalMessages = inbox.Count;
+                    totalUnread = inbox.Unread;
 
                     int index = Math.Max(inbox.Count - limit, 0);
 
-                    Emails = inbox
+                    emails = inbox
                         .Fetch(index, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId)
                         .Select(x => new Email()
                         {
@@ -114,8 +138,8 @@ namespace Rainmail
         {
             output = "";
 
-            if (Emails?.Length > 0)
-                output = string.Join("\n", Emails.Select(x => FormatEmail(x, x.Read ? readTemplate : unreadTemplate)));
+            if (emails?.Length > 0)
+                output = string.Join("\n", emails.Select(x => FormatEmail(x, x.Read ? readTemplate : unreadTemplate)));
         }
 
         private string FormatEmail(Email email, TemplateOption[] options)
@@ -190,13 +214,5 @@ namespace Rainmail
                 .Where(x => x.Skin == skin && x.Name == name)
                 .FirstOrDefault();
         }
-
-        // ----- Properties ----- //
-
-        public int TotalMessages { private set; get; } = -1;
-
-        public int TotalUnread { private set; get; } = -1;
-
-        public Email[] Emails { private set; get; } = null;
     }
 }
