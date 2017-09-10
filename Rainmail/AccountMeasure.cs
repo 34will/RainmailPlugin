@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security;
 using System.Threading.Tasks;
 
 using Rainmeter;
@@ -21,7 +22,7 @@ namespace Rainmail
         private int port = 993;
         private bool useSSL = true;
         private string username = null;
-        private string password = null;
+        private SecureString password = null;
         private int limit = 100;
         private TemplateOption[] readTemplate = null;
         private TemplateOption[] unreadTemplate = null;
@@ -29,7 +30,7 @@ namespace Rainmail
         private int totalMessages = -1;
         private int totalUnread = -1;
         private Email[] emails = null;
-        private string output = "";
+        private string output = "Loading...";
 
         public override void Reload(API api, ref double maxValue)
         {
@@ -39,7 +40,11 @@ namespace Rainmail
             port = api.ReadInt("Port", 993);
             useSSL = api.ReadString("UseSSL", "true") == "true";
             username = api.ReadString("Username", null);
-            password = api.ReadString("Password", null);
+
+            string password = api.ReadString("Password", null);
+            if (string.IsNullOrEmpty(password) && api.ReadInt("EmptyPassword", 0) == 0)
+                password = null;
+
             limit = api.ReadInt("Limit", 100);
             string readTemplate = api.ReadString("ReadTemplate", null);
             string unreadTemplate = api.ReadString("UnreadTemplate", null);
@@ -64,12 +69,25 @@ namespace Rainmail
                 this.readTemplate = TemplateOption.ParseTemplate(readTemplate);
                 this.unreadTemplate = TemplateOption.ParseTemplate(unreadTemplate);
 
-                DoUpdate();
+                if (password != null)
+                    AssignPassword(password);
+
+                Update();
             }
         }
 
-        public void DoUpdate()
+        private void AssignPassword(string value)
         {
+            password = new SecureString();
+            foreach (char c in value)
+                password.AppendChar(c);
+        }
+
+        public async Task DoUpdate()
+        {
+            if (password == null)
+                AssignPassword(await InputForm.QueryPassword());
+
             UpdateEmails();
 
             UpdateOutput();
@@ -87,7 +105,7 @@ namespace Rainmail
                 lock (locker)
                 {
                     running = true;
-                    Task.Run(() => DoUpdate());
+                    Task.Run(async () => await DoUpdate());
                 }
             }
 
@@ -96,7 +114,7 @@ namespace Rainmail
 
         private void UpdateEmails()
         {
-            if (!string.IsNullOrWhiteSpace(host) && !string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password) && port > 0 && limit >= -1)
+            if (!string.IsNullOrWhiteSpace(host) && !string.IsNullOrWhiteSpace(username) && password != null && port > 0 && limit >= -1)
             {
                 using (ImapClient client = new ImapClient())
                 {
@@ -107,7 +125,7 @@ namespace Rainmail
 
                     client.AuthenticationMechanisms.Remove("XOAUTH2");
 
-                    client.Authenticate(username, password);
+                    client.Authenticate(username, password.ToString());
 
                     IMailFolder inbox = client.Inbox;
                     inbox.Open(FolderAccess.ReadOnly);
@@ -136,7 +154,7 @@ namespace Rainmail
 
         public void UpdateOutput()
         {
-            output = "";
+            output = "Loading...";
 
             if (emails?.Length > 0)
                 output = string.Join("\n", emails.Select(x => FormatEmail(x, x.Read ? readTemplate : unreadTemplate)));
