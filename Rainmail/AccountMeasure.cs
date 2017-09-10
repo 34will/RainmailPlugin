@@ -19,6 +19,10 @@ namespace Rainmail
         private string username = null;
         private string password = null;
         private int limit = 100;
+        private TemplateOption[] readTemplate = null;
+        private TemplateOption[] unreadTemplate = null;
+
+        private string output = "";
 
         public override void Reload(API api, ref double maxValue)
         {
@@ -30,6 +34,8 @@ namespace Rainmail
             username = api.ReadString("Username", null);
             password = api.ReadString("Password", null);
             limit = api.ReadInt("Limit", 100);
+            string readTemplate = api.ReadString("ReadTemplate", null);
+            string unreadTemplate = api.ReadString("UnreadTemplate", null);
 
             if (string.IsNullOrWhiteSpace(host))
                 API.Log(API.LogType.Error, $"Missing Host parameter for Measure: {Name}.");
@@ -39,13 +45,27 @@ namespace Rainmail
                 API.Log(API.LogType.Error, $"Missing Username parameter for Measure: {Name}.");
             else if (limit < -1)
                 API.Log(API.LogType.Error, $"Invalid Limit parameter for Measure: {Name}.");
+            else if (string.IsNullOrWhiteSpace(readTemplate) && string.IsNullOrWhiteSpace(unreadTemplate))
+                API.Log(API.LogType.Error, $"Must provide a template parameter for Measure: {Name}.");
             else
-                UpdateEmails();
+            {
+                if (string.IsNullOrWhiteSpace(readTemplate))
+                    readTemplate = unreadTemplate;
+                else if (string.IsNullOrWhiteSpace(unreadTemplate))
+                    unreadTemplate = readTemplate;
+
+                this.readTemplate = TemplateOption.ParseTemplate(readTemplate);
+                this.unreadTemplate = TemplateOption.ParseTemplate(unreadTemplate);
+
+                Update();
+            }
         }
 
         public override double Update()
         {
             UpdateEmails();
+
+            UpdateOutput();
 
             return base.Update();
         }
@@ -71,20 +91,97 @@ namespace Rainmail
                     TotalMessages = inbox.Count;
                     TotalUnread = inbox.Unread;
 
+                    int index = Math.Max(inbox.Count - limit, 0);
+
                     Emails = inbox
-                        .Fetch(0, limit, MessageSummaryItems.Full | MessageSummaryItems.UniqueId)
+                        .Fetch(index, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId)
                         .Select(x => new Email()
                         {
                             From = x.Envelope.From.FirstOrDefault().ToString(),
                             Subject = x.Envelope.Subject,
                             Recieved = x.Date.UtcDateTime,
-                            Read = !(x.Flags.HasValue && (x.Flags.Value & MessageFlags.Seen) == MessageFlags.Seen)
+                            Read = x.Flags.HasValue && (x.Flags.Value & MessageFlags.Seen) == MessageFlags.Seen
                         })
-                         .ToArray();
+                        .Reverse()
+                        .ToArray();
 
                     client.Disconnect(true);
                 }
             }
+        }
+
+        public void UpdateOutput()
+        {
+            output = "";
+
+            if (Emails?.Length > 0)
+                output = string.Join("\n", Emails.Select(x => FormatEmail(x, x.Read ? readTemplate : unreadTemplate)));
+        }
+
+        private string FormatEmail(Email email, TemplateOption[] options)
+        {
+            string output = "";
+
+            foreach (TemplateOption option in options)
+            {
+                switch (option.Type)
+                {
+                    case TemplateOptionType.Literal:
+                        output += option.Data;
+                        break;
+                    case TemplateOptionType.Recieved:
+                        if (option.Data == null)
+                            output += email.Recieved.ToString();
+                        else
+                            output += email.Recieved.ToString(option.Data);
+                        break;
+                    case TemplateOptionType.Sender:
+                        if (option.Data == null)
+                            output += email.From;
+                        else if (int.TryParse(option.Data, out int length))
+                            output += PadOrTrim(email.From, length);
+                        break;
+                    case TemplateOptionType.Subject:
+                        if (option.Data == null)
+                            output += email.Subject;
+                        else if (int.TryParse(option.Data, out int length))
+                            output += PadOrTrim(email.Subject, length);
+                        break;
+                }
+            }
+
+            return output;
+        }
+
+        private string PadOrTrim(string value, int length)
+        {
+            string output = "";
+
+            if (value.Length > length)
+                output = value.Substring(0, length - 3) + "...";
+            else if (value.Length == length)
+                output = value;
+            else
+            {
+                int y;
+                if (string.IsNullOrWhiteSpace(value))
+                    y = length;
+                else
+                {
+                    output = value;
+                    y = (length - value.Length);
+                }
+
+                for (int i = 0; i < y; i++)
+                    output += " ";
+            }
+
+            return output;
+        }
+
+        public override string GetString()
+        {
+            return output;
         }
 
         public static AccountMeasure Find(IntPtr skin, string name)
@@ -96,10 +193,10 @@ namespace Rainmail
 
         // ----- Properties ----- //
 
-        public int TotalMessages { private set; get; }
+        public int TotalMessages { private set; get; } = -1;
 
-        public int TotalUnread { private set; get; }
+        public int TotalUnread { private set; get; } = -1;
 
-        public Email[] Emails { private set; get; }
+        public Email[] Emails { private set; get; } = null;
     }
 }

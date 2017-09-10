@@ -12,16 +12,7 @@ namespace Rainmail
         [DllExport]
         public static void Initialize(ref IntPtr data, IntPtr rm)
         {
-            API api = new API(rm);
-
-            string parent = api.ReadString("AccountMeasure", "");
-            Measure measure;
-            if (String.IsNullOrEmpty(parent))
-                measure = new AccountMeasure();
-            else
-                measure = new ColumnMeasure();
-
-            data = GCHandle.ToIntPtr(GCHandle.Alloc(measure));
+            data = GCHandle.ToIntPtr(GCHandle.Alloc(new AccountMeasure()));
         }
 
         [DllExport]
