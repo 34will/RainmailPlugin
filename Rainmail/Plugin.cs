@@ -18,7 +18,9 @@ namespace Rainmail
         [DllExport]
         public static void Finalize(IntPtr data)
         {
-            GCHandle.FromIntPtr(data).Free();
+            GCHandle handle = GCHandle.FromIntPtr(data);
+            ((Measure)GCHandle.FromIntPtr(data).Target).Finished();
+            handle.Free();
 
             if (StringBuffer != IntPtr.Zero)
             {
@@ -30,28 +32,25 @@ namespace Rainmail
         [DllExport]
         public static void Reload(IntPtr data, IntPtr rm, ref double maxValue)
         {
-            Measure measure = (Measure)GCHandle.FromIntPtr(data).Target;
-            measure.Reload(new API(rm), ref maxValue);
+            ((Measure)GCHandle.FromIntPtr(data).Target).Reload(new API(rm), ref maxValue);
         }
 
         [DllExport]
         public static double Update(IntPtr data)
         {
-            Measure measure = (Measure)GCHandle.FromIntPtr(data).Target;
-            return measure.Update();
+            return ((Measure)GCHandle.FromIntPtr(data).Target).Update();
         }
 
         [DllExport]
         public static IntPtr GetString(IntPtr data)
         {
-            Measure measure = (Measure)GCHandle.FromIntPtr(data).Target;
             if (StringBuffer != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(StringBuffer);
                 StringBuffer = IntPtr.Zero;
             }
 
-            string stringValue = measure.GetString();
+            string stringValue = ((Measure)GCHandle.FromIntPtr(data).Target).GetString();
             if (stringValue != null)
             {
                 StringBuffer = Marshal.StringToHGlobalUni(stringValue);

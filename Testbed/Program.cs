@@ -32,15 +32,15 @@ namespace Testbed
 
                 client.Authenticate(username, password);
 
-                IMailFolder inbox = client.Inbox;
-                inbox.Open(FolderAccess.ReadOnly);
+                IMailFolder folder = client.GetFolder("Sent");
+                folder.Open(FolderAccess.ReadOnly);
 
-                Console.WriteLine($"Total: {inbox.Count}");
-                Console.WriteLine($"Unread: {inbox.Unread}");
+                Console.WriteLine($"Total: {folder.Count}");
+                Console.WriteLine($"Unread: {folder.Unread}");
 
-                int index = Math.Max(inbox.Count - limit, 0);
+                int index = Math.Max(folder.Count - limit, 0);
 
-                foreach (IMessageSummary x in inbox.Fetch(index, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId).ToArray().Reverse())
+                foreach (IMessageSummary x in folder.Fetch(index, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId).ToArray().Reverse())
                 {
                     Console.WriteLine($"From: {PadOrTrim(x.Envelope.From.FirstOrDefault().ToString(), 50)}, Subject: {x.Envelope.Subject}, Recieved: {x.Date.UtcDateTime}, Read: {x.Flags.HasValue && (x.Flags.Value & MessageFlags.Seen) == MessageFlags.Seen}.");
                 }

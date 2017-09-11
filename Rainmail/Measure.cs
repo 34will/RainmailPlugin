@@ -19,6 +19,9 @@ namespace Rainmail
             return 0.0;
         }
 
+        public virtual void Finished()
+        { }
+
         public virtual string GetString()
         {
             return "";

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Threading.Tasks;
 
@@ -8,6 +9,7 @@ using Rainmeter;
 
 using MailKit;
 using MailKit.Net.Imap;
+using MailKit.Security;
 
 namespace Rainmail
 {
@@ -26,10 +28,12 @@ namespace Rainmail
         private int limit = 100;
         private TemplateOption[] readTemplate = null;
         private TemplateOption[] unreadTemplate = null;
+        private string folderName = null;
 
         private int totalMessages = -1;
         private int totalUnread = -1;
         private Email[] emails = null;
+        private string defaultOutput = "Loading...";
         private string output = "Loading...";
 
         public override void Reload(API api, ref double maxValue)
@@ -38,7 +42,7 @@ namespace Rainmail
 
             host = api.ReadString("Host", null);
             port = api.ReadInt("Port", 993);
-            useSSL = api.ReadString("UseSSL", "true") == "true";
+            useSSL = api.ReadInt("UseSSL", 1) == 1;
             username = api.ReadString("Username", null);
 
             string password = api.ReadString("Password", null);
@@ -46,6 +50,11 @@ namespace Rainmail
                 password = null;
 
             limit = api.ReadInt("Limit", 100);
+
+            folderName = api.ReadString("FolderName", "Inbox");
+            if (string.IsNullOrWhiteSpace(folderName) || folderName.ToLower() == "inbox")
+                folderName = null;
+
             string readTemplate = api.ReadString("ReadTemplate", null);
             string unreadTemplate = api.ReadString("UnreadTemplate", null);
 
@@ -72,21 +81,39 @@ namespace Rainmail
                 if (password != null)
                     AssignPassword(password);
 
-                Update();
+                running = true;
+                Task.Run(async () => await DoUpdate());
             }
+        }
+
+        public override void Finished()
+        {
+            if (password != null)
+                password.Dispose();
         }
 
         private void AssignPassword(string value)
         {
-            password = new SecureString();
-            foreach (char c in value)
-                password.AppendChar(c);
+            if (value != null)
+            {
+                if (password != null)
+                    password.Dispose();
+
+                password = new SecureString();
+                foreach (char c in value)
+                    password.AppendChar(c);
+
+                password.MakeReadOnly();
+            }
         }
 
-        public async Task DoUpdate()
+        private async Task DoUpdate()
         {
             if (password == null)
                 AssignPassword(await InputForm.QueryPassword());
+
+            emails = null;
+            defaultOutput = "Loading...";
 
             UpdateEmails();
 
@@ -125,27 +152,54 @@ namespace Rainmail
 
                     client.AuthenticationMechanisms.Remove("XOAUTH2");
 
-                    client.Authenticate(username, password.ToString());
+                    try
+                    {
+                        client.Authenticate(username, GetString(password));
+                    }
+                    catch (AuthenticationException)
+                    {
+                        password = null;
+                        defaultOutput = "Invalid username and password combination.";
+                        return;
+                    }
 
-                    IMailFolder inbox = client.Inbox;
-                    inbox.Open(FolderAccess.ReadOnly);
-
-                    totalMessages = inbox.Count;
-                    totalUnread = inbox.Unread;
-
-                    int index = Math.Max(inbox.Count - limit, 0);
-
-                    emails = inbox
-                        .Fetch(index, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId)
-                        .Select(x => new Email()
+                    IMailFolder folder;
+                    if (folderName == null)
+                        folder = client.Inbox;
+                    else
+                    {
+                        try
                         {
-                            From = x.Envelope.From.FirstOrDefault().ToString(),
-                            Subject = x.Envelope.Subject,
-                            Recieved = x.Date.UtcDateTime,
-                            Read = x.Flags.HasValue && (x.Flags.Value & MessageFlags.Seen) == MessageFlags.Seen
-                        })
-                        .Reverse()
-                        .ToArray();
+                            folder = client.GetFolder(folderName);
+                        }
+                        catch (FolderNotFoundException)
+                        {
+                            folder = null;
+                            defaultOutput = $"A folder with the name: \"{folderName}\" could not be found.";
+                        }
+                    }
+
+                    if (folder != null)
+                    {
+                        folder.Open(FolderAccess.ReadOnly);
+
+                        totalMessages = folder.Count;
+                        totalUnread = folder.Unread;
+
+                        int index = Math.Max(folder.Count - limit, 0);
+
+                        emails = folder
+                            .Fetch(index, -1, MessageSummaryItems.Full | MessageSummaryItems.UniqueId)
+                            .Select(x => new Email()
+                            {
+                                From = x.Envelope.From.FirstOrDefault().ToString(),
+                                Subject = x.Envelope.Subject,
+                                Recieved = x.Date.UtcDateTime,
+                                Read = x.Flags.HasValue && (x.Flags.Value & MessageFlags.Seen) == MessageFlags.Seen
+                            })
+                            .Reverse()
+                            .ToArray();
+                    }
 
                     client.Disconnect(true);
                 }
@@ -154,7 +208,7 @@ namespace Rainmail
 
         public void UpdateOutput()
         {
-            output = "Loading...";
+            output = defaultOutput;
 
             if (emails?.Length > 0)
                 output = string.Join("\n", emails.Select(x => FormatEmail(x, x.Read ? readTemplate : unreadTemplate)));
@@ -224,6 +278,20 @@ namespace Rainmail
         public override string GetString()
         {
             return output;
+        }
+
+        public static string GetString(SecureString value)
+        {
+            IntPtr valuePtr = IntPtr.Zero;
+            try
+            {
+                valuePtr = Marshal.SecureStringToGlobalAllocUnicode(value);
+                return Marshal.PtrToStringUni(valuePtr);
+            }
+            finally
+            {
+                Marshal.ZeroFreeGlobalAllocUnicode(valuePtr);
+            }
         }
 
         public static AccountMeasure Find(IntPtr skin, string name)
