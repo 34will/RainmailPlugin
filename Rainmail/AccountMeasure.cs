@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 using Rainmeter;
 
@@ -16,6 +17,7 @@ namespace Rainmail
     public class AccountMeasure : Measure
     {
         private static List<AccountMeasure> list = new List<AccountMeasure>();
+        private static Regex icons = new Regex("\uD83C[\uDF00-\uDFFF]|\uD83D[\uDC00-\uDEFF]|[\u2600-\u26FF]");
 
         private object locker = new object();
         private bool running = false;
@@ -29,6 +31,7 @@ namespace Rainmail
         private TemplateOption[] readTemplate = null;
         private TemplateOption[] unreadTemplate = null;
         private string folderName = null;
+        private bool removeIcons = true;
 
         private int totalMessages = -1;
         private int totalUnread = -1;
@@ -54,6 +57,8 @@ namespace Rainmail
             folderName = api.ReadString("FolderName", "Inbox");
             if (string.IsNullOrWhiteSpace(folderName) || folderName.ToLower() == "inbox")
                 folderName = null;
+
+            removeIcons = api.ReadInt("RemoveIcons", 0) == 1;
 
             string readTemplate = api.ReadString("ReadTemplate", null);
             string unreadTemplate = api.ReadString("UnreadTemplate", null);
@@ -242,6 +247,9 @@ namespace Rainmail
                         break;
                 }
             }
+
+            if (output.Length > 0 && removeIcons)
+                output = icons.Replace(output, string.Empty);
 
             return output;
         }
