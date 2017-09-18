@@ -80,9 +80,6 @@ namespace Rainmail
 
                 if (password != null)
                     AssignPassword(password);
-
-                running = true;
-                Task.Run(async () => await DoUpdate());
             }
         }
 
