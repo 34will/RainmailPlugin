@@ -11,16 +11,29 @@ using Rainmeter;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Security;
+using System.Drawing;
+using System.Windows.Forms;
 
 namespace Rainmail
 {
     public class AccountMeasure : Measure
     {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
         private static List<AccountMeasure> list = new List<AccountMeasure>();
         private static Regex icons = new Regex("\uD83C[\uDF00-\uDFFF]|\uD83D[\uDC00-\uDEFF]|[\u2600-\u26FF]");
 
-        private object locker = new object();
+        private readonly object locker = new object();
         private bool running = false;
+        private bool inactive = false;
+        private IntPtr hwnd = IntPtr.Zero;
 
         private string host = null;
         private int port = 993;
@@ -36,12 +49,13 @@ namespace Rainmail
         private int totalMessages = -1;
         private int totalUnread = -1;
         private Email[] emails = null;
-        private string defaultOutput = "Loading...";
         private string output = "Loading...";
 
         public override void Reload(API api, ref double maxValue)
         {
             base.Reload(api, ref maxValue);
+
+            hwnd = api.GetSkinWindow();
 
             host = api.ReadString("Host", null);
             port = api.ReadInt("Port", 993);
@@ -96,7 +110,9 @@ namespace Rainmail
 
         private void AssignPassword(string value)
         {
-            if (value != null)
+            if (value == null)
+                inactive = true;
+            else
             {
                 if (password != null)
                     password.Dispose();
@@ -111,15 +127,23 @@ namespace Rainmail
 
         private async Task DoUpdate()
         {
-            if (password == null)
-                AssignPassword(await InputForm.QueryPassword());
+            if (!inactive && password == null)
+            {
+                RECT skinWindow = new RECT();
+                GetWindowRect(hwnd, ref skinWindow);
+                AssignPassword(await InputForm.QueryString(new Point(skinWindow.Left + 5, skinWindow.Top + 5)));
+            }
 
             emails = null;
-            defaultOutput = "Loading...";
+            if (inactive)
+                output = "Cancelled. Reload to try again.";
+            else
+            {
+                UpdateEmails();
 
-            UpdateEmails();
-
-            UpdateOutput();
+                if (emails?.Length > 0)
+                    output = string.Join("\n", emails.Select(x => FormatEmail(x, x.Read ? readTemplate : unreadTemplate, removeIcons)));
+            }
 
             lock (locker)
             {
@@ -134,8 +158,8 @@ namespace Rainmail
                 lock (locker)
                 {
                     running = true;
-                    Task.Run(async () => await DoUpdate());
                 }
+                Task.Run(async () => await DoUpdate());
             }
 
             return base.Update();
@@ -157,32 +181,13 @@ namespace Rainmail
                     try
                     {
                         client.Authenticate(username, GetString(password));
-                    }
-                    catch (AuthenticationException)
-                    {
-                        password = null;
-                        defaultOutput = "Invalid username and password combination.";
-                        return;
-                    }
 
-                    IMailFolder folder;
-                    if (folderName == null)
-                        folder = client.Inbox;
-                    else
-                    {
-                        try
-                        {
+                        IMailFolder folder = null;
+                        if (folderName == null)
+                            folder = client.Inbox;
+                        else
                             folder = client.GetFolder(folderName);
-                        }
-                        catch (FolderNotFoundException)
-                        {
-                            folder = null;
-                            defaultOutput = $"A folder with the name: \"{folderName}\" could not be found.";
-                        }
-                    }
 
-                    if (folder != null)
-                    {
                         folder.Open(FolderAccess.ReadOnly);
 
                         totalMessages = folder.Count;
@@ -202,21 +207,35 @@ namespace Rainmail
                             .Reverse()
                             .ToArray();
                     }
-
-                    client.Disconnect(true);
+                    catch (AuthenticationException)
+                    {
+                        password = null;
+                        output = "Invalid username and password combination.";
+                    }
+                    catch (FolderNotFoundException)
+                    {
+                        output = $"A folder with the name: \"{folderName}\" could not be found.";
+                        inactive = true;
+                    }
+                    catch (Exception e)
+                    {
+                        output = "Something went wrong.";
+                        API.Log(API.LogType.Error, e.Message);
+                    }
+                    finally
+                    {
+                        client.Disconnect(true);
+                    }
                 }
             }
         }
 
-        public void UpdateOutput()
+        public override string GetString()
         {
-            output = defaultOutput;
-
-            if (emails?.Length > 0)
-                output = string.Join("\n", emails.Select(x => FormatEmail(x, x.Read ? readTemplate : unreadTemplate)));
+            return output;
         }
 
-        private string FormatEmail(Email email, TemplateOption[] options)
+        private static string FormatEmail(Email email, TemplateOption[] options, bool removeIcons)
         {
             string output = "";
 
@@ -254,7 +273,7 @@ namespace Rainmail
             return output;
         }
 
-        private string PadOrTrim(string value, int length)
+        private static string PadOrTrim(string value, int length)
         {
             string output = "";
 
@@ -280,11 +299,6 @@ namespace Rainmail
             return output;
         }
 
-        public override string GetString()
-        {
-            return output;
-        }
-
         public static string GetString(SecureString value)
         {
             IntPtr valuePtr = IntPtr.Zero;
@@ -305,5 +319,9 @@ namespace Rainmail
                 .Where(x => x.Skin == skin && x.Name == name)
                 .FirstOrDefault();
         }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetWindowRect(IntPtr hWnd, ref RECT lpRect);
     }
 }

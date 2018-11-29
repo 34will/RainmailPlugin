@@ -1,5 +1,6 @@
 ﻿using System;
 using System.ComponentModel;
+using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -33,9 +34,12 @@ namespace Rainmail
             Close();
         }
 
-        public static Task<string> QueryPassword()
+        public static Task<string> QueryString(Point? location = null)
         {
             InputForm form = new InputForm();
+            if (location.HasValue)
+                form.Location = location.Value;
+            form.StartPosition = FormStartPosition.Manual;
             form.ShowDialog();
 
             return form.Task;
